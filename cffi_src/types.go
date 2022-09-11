@@ -1,4 +1,4 @@
-package main
+package tls_client_cffi_src
 
 import (
 	"encoding/json"
@@ -20,12 +20,13 @@ func (e *TLSClientError) Error() string {
 	return e.err.Error()
 }
 
-type RequestParams struct {
+type RequestInput struct {
 	SessionId           *string           `json:"sessionId"`
 	TLSClientIdentifier string            `json:"tlsClientIdentifier"`
+	CustomTlsClient     *CustomTlsClient  `json:"customTlsClient"`
 	FollowRedirects     bool              `json:"followRedirects"`
+	InsecureSkipVerify  bool              `json:"insecureSkipVerify"`
 	TimeoutSeconds      int               `json:"timeoutSeconds"`
-	Ja3String           string            `json:"ja3String"`
 	ProxyUrl            *string           `json:"proxyUrl"`
 	Headers             map[string]string `json:"headers"`
 	HeaderOrder         []string          `json:"headerOrder"`
@@ -33,6 +34,24 @@ type RequestParams struct {
 	RequestMethod       string            `json:"requestMethod"`
 	RequestBody         *string           `json:"requestBody"`
 	RequestCookies      []CookieInput     `json:"requestCookies"`
+}
+
+type CustomTlsClient struct {
+	Ja3String         string            `json:"ja3String"`
+	H2Settings        map[uint16]uint32 `json:"h2Settings"`
+	H2SettingsOrder   []uint16          `json:"h2SettingsOrder"`
+	PseudoHeaderOrder []string          `json:"pseudoHeaderOrder"`
+	ConnectionFlow    uint32            `json:"connectionFlow"`
+	PriorityFrames    []PriorityFrames  `json:"priorityFrames"`
+}
+
+type PriorityFrames struct {
+	StreamID      uint32 `json:"streamID"`
+	PriorityParam struct {
+		StreamDep uint32 `json:"streamDep"`
+		Exclusive bool   `json:"exclusive"`
+		Weight    uint8  `json:"weight"`
+	} `json:"priorityParam"`
 }
 
 type CookieInput struct {
