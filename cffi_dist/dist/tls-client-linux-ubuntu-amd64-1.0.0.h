@@ -73,10 +73,11 @@ typedef struct { void *data; GoInt len; GoInt cap; } GoSlice;
 extern "C" {
 #endif
 
-extern __declspec(dllexport) char* freeAll();
-extern __declspec(dllexport) char* freeSession(char* freeSessionParams);
-extern __declspec(dllexport) char* getCookiesFromSession(char* getCookiesParams);
-extern __declspec(dllexport) char* request(char* requestParams);
+extern void freeMemory(char* responseId);
+extern char* destroyAll();
+extern char* destroySession(char* destroySessionParams);
+extern char* getCookiesFromSession(char* getCookiesParams);
+extern char* request(char* requestParams);
 
 #ifdef __cplusplus
 }

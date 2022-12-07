@@ -73,8 +73,9 @@ typedef struct { void *data; GoInt len; GoInt cap; } GoSlice;
 extern "C" {
 #endif
 
-extern char* freeAll();
-extern char* freeSession(char* freeSessionParams);
+extern void freeMemory(char* responseId);
+extern char* destroyAll();
+extern char* destroySession(char* destroySessionParams);
 extern char* getCookiesFromSession(char* getCookiesParams);
 extern char* request(char* requestParams);
 

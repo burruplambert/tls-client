@@ -43,8 +43,8 @@ typedef int GoInt32;
 typedef unsigned int GoUint32;
 typedef long long GoInt64;
 typedef unsigned long long GoUint64;
-typedef GoInt32 GoInt;
-typedef GoUint32 GoUint;
+typedef GoInt64 GoInt;
+typedef GoUint64 GoUint;
 typedef __SIZE_TYPE__ GoUintptr;
 typedef float GoFloat32;
 typedef double GoFloat64;
@@ -55,7 +55,7 @@ typedef double _Complex GoComplex128;
   static assertion to make sure the file is being used on architecture
   at least with matching size of GoInt.
 */
-typedef char _check_for_32_bit_pointer_matching_GoInt[sizeof(void*)==32/8 ? 1:-1];
+typedef char _check_for_64_bit_pointer_matching_GoInt[sizeof(void*)==64/8 ? 1:-1];
 
 #ifndef GO_CGO_GOSTRING_TYPEDEF
 typedef _GoString_ GoString;
@@ -73,10 +73,11 @@ typedef struct { void *data; GoInt len; GoInt cap; } GoSlice;
 extern "C" {
 #endif
 
-extern __declspec(dllexport) char* freeAll();
-extern __declspec(dllexport) char* freeSession(char* freeSessionParams);
-extern __declspec(dllexport) char* getCookiesFromSession(char* getCookiesParams);
-extern __declspec(dllexport) char* request(char* requestParams);
+extern void freeMemory(char* responseId);
+extern char* destroyAll();
+extern char* destroySession(char* destroySessionParams);
+extern char* getCookiesFromSession(char* getCookiesParams);
+extern char* request(char* requestParams);
 
 #ifdef __cplusplus
 }
