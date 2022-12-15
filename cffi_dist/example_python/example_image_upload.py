@@ -1,16 +1,14 @@
 import ctypes
 import json
+import base64
 
+# load the tls-client shared package for your OS you are currently running your python script (i'm running on mac)
 library = ctypes.cdll.LoadLibrary('./../dist/tls-client-darwin-amd64-1.0.1.dylib')
 
 # extract the exposed request function from the shared package
 request = library.request
 request.argtypes = [ctypes.c_char_p]
 request.restype = ctypes.c_char_p
-
-getCookiesFromSession = library.getCookiesFromSession
-getCookiesFromSession.argtypes = [ctypes.c_char_p]
-getCookiesFromSession.restype = ctypes.c_char_p
 
 freeMemory = library.freeMemory
 freeMemory.argtypes = [ctypes.c_char_p]
@@ -22,16 +20,21 @@ destroySession.restype = ctypes.c_char_p
 destroyAll = library.destroyAll
 destroyAll.restype = ctypes.c_char_p
 
+
+with open("cb_example.png", "rb") as image_file:
+    encoded_string = base64.b64encode(image_file.read())
+
 requestPayload = {
     "tlsClientIdentifier": "chrome_105",
     "followRedirects": False,
     "insecureSkipVerify": False,
     "withoutCookieJar": False,
-    "isByteRequest": False,
+    "isByteRequest": True,
     "forceHttp1": False,
     "withDebug": False,
     "withRandomTLSExtensionOrder": False,
-    "timeoutSeconds": 1,
+    "isByteResponse": False,
+    "timeoutSeconds": 30,
     "proxyUrl": "",
     "headers": {
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
@@ -45,9 +48,9 @@ requestPayload = {
         "accept-encoding",
         "accept-language"
     ],
-    "requestUrl": "https://www.google.com:81",
-    "requestMethod": "GET",
-    "requestBody": "",
+    "requestUrl": "https://eo1wmj45078deme.m.pipedream.net",
+    "requestMethod": "POST",
+    "requestBody": encoded_string.decode('utf-8'),
     "requestCookies": []
 }
 
@@ -63,5 +66,4 @@ response_string = response_bytes.decode('utf-8')
 # convert response string to json
 response_object = json.loads(response_string)
 
-# print out output
 print(response_object)
