@@ -77,6 +77,7 @@ extern void freeMemory(char* responseId);
 extern char* destroyAll();
 extern char* destroySession(char* destroySessionParams);
 extern char* getCookiesFromSession(char* getCookiesParams);
+extern char* addCookiesToSession(char* addCookiesParams);
 extern char* request(char* requestParams);
 
 #ifdef __cplusplus

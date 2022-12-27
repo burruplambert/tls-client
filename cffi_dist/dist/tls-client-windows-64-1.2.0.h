@@ -77,6 +77,7 @@ extern __declspec(dllexport) void freeMemory(char* responseId);
 extern __declspec(dllexport) char* destroyAll();
 extern __declspec(dllexport) char* destroySession(char* destroySessionParams);
 extern __declspec(dllexport) char* getCookiesFromSession(char* getCookiesParams);
+extern __declspec(dllexport) char* addCookiesToSession(char* addCookiesParams);
 extern __declspec(dllexport) char* request(char* requestParams);
 
 #ifdef __cplusplus
