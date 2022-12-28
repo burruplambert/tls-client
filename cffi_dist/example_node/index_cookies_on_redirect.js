@@ -10,32 +10,42 @@ const tlsClientLibrary = ffi.Library('./../dist/tls-client-darwin-amd64-1.2.0.dy
 });
 
 const requestPayload = {
-    "tlsClientIdentifier": "chrome_103",
-    "followRedirects": false,
+    "tlsClientIdentifier": "chrome_108",
+    "followRedirects": true,
     "insecureSkipVerify": false,
     "withoutCookieJar": false,
     "withDefaultCookieJar": false,
     "isByteRequest": false,
     "withDebug": false,
     "forceHttp1": false,
-    "withRandomTLSExtensionOrder": false,
+    "withRandomTLSExtensionOrder": true,
     "timeoutSeconds": 30,
     "timeoutMilliseconds": 0,
-    "sessionId": "my-session-id",
+    "sessionId": "asos",
     "proxyUrl": "",
     "headers": {
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36",
         "accept-encoding": "gzip, deflate, br",
-        "accept-language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"
+        "accept-language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+        "accept": "*/*",
+        "cache-control": "no-cache",
+        "sec-ch-ua": `"Google Chrome";v="107", "Chromium";v="107", "Not=A?Brand";v="24"`,
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": `"macOS"`,
+        "sec-fetch-dest": "empty",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36"
     },
     "headerOrder": [
         "accept",
-        "user-agent",
         "accept-encoding",
-        "accept-language"
+        "accept-language",
+        "cache-control",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "user-agent",
     ],
-    "requestUrl": "https://microsoft.com",
+    "requestUrl": "https://my.asos.com",
     "requestMethod": "GET",
     "requestBody": "",
     "requestCookies": []
@@ -48,27 +58,17 @@ const response = tlsClientLibrary.request(JSON.stringify(requestPayload));
 // convert response string to json
 const responseObject = JSON.parse(response)
 
-console.log(responseObject)
+console.log("status", responseObject.status)
+console.log("target", responseObject.target)
 tlsClientLibrary.freeMemory(responseObject.Id)
 
 const payload = {
-    sessionId: 'my-session-id',
-    url: "https://example.com",
+    sessionId: 'asos',
+    url: "https://my.asos.com",
 }
 
 const cookiesResponse = tlsClientLibrary.getCookiesFromSession(JSON.stringify(payload))
 
 const cookiesInSession = JSON.parse(cookiesResponse)
 
-console.log(cookiesInSession)
-
-
-const destroySessionPayload = {
-    sessionId: 'my-session-id',
-}
-
-const destroySessionResponse = tlsClientLibrary.destroySession(JSON.stringify(destroySessionPayload))
-
-const destroySessionResponseParsed = JSON.parse(destroySessionResponse)
-
-console.log(destroySessionResponseParsed)
+cookiesInSession.cookies.map(c => console.log(c.Name, c.Value, c.Domain, c.Path))
