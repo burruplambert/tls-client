@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
+	"maps"
 	"net/url"
 	"strings"
 	"sync"
@@ -133,10 +133,16 @@ func (c *httpClient) PreConnect(urlStr string) error {
 		return fmt.Errorf("PreConnect only supports https URLs")
 	}
 
-	// Get the host:port
-	host := parsedURL.Host
-	if parsedURL.Port() == "" {
-		host = net.JoinHostPort(host, "443")
+	// Create a dummy request object (but we won't send it)
+	req, err := http.NewRequest(http.MethodHead, urlStr, nil)
+	if err != nil {
+		c.logger.Error("failed to create request: %s", err.Error())
+		return err
+	}
+
+	// Apply default headers from the client config
+	if len(c.config.defaultHeaders) > 0 {
+		maps.Copy(req.Header, c.config.defaultHeaders)
 	}
 
 	// Get the underlying transport
@@ -146,22 +152,27 @@ func (c *httpClient) PreConnect(urlStr string) error {
 		return fmt.Errorf("invalid transport type")
 	}
 
-	// Use the existing dialTLS to establish just the TLS connection
-	ctx := context.Background()
-	if c.config.timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.config.timeout)
-		defer cancel()
+	// Get the address using the same method as real requests
+	addr := rt.getDialTLSAddr(req)
+
+	// Lock the cache to prevent concurrent modifications
+	rt.cachedTransportsLck.Lock()
+	defer rt.cachedTransportsLck.Unlock()
+
+	// Check if we already have a transport for this address
+	if _, ok := rt.cachedTransports[addr]; ok {
+		c.logger.Debug("connection to %s already established", urlStr)
+		return nil
 	}
 
-	_, err = rt.dialTLS(ctx, "tcp", host)
-	if err != nil && err != errProtocolNegotiated {
+	// use getTransport which properly sets up both cachedConnections and cachedTransports
+	err = rt.getTransport(req, addr)
+	if err != nil {
 		c.logger.Error("failed to establish TLS connection: %s", err.Error())
 		return err
 	}
 
 	c.logger.Debug("successfully preconnected to %s", urlStr)
-
 	return nil
 }
 
