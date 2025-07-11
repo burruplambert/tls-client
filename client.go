@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
@@ -37,6 +38,7 @@ type HttpClient interface {
 	Post(url, contentType string, body io.Reader) (resp *http.Response, err error)
 
 	GetBandwidthTracker() bandwidth.BandwidthTracker
+	PreConnect(urlStr string) error
 }
 
 // Interface guards are a cheap way to make sure all methods are implemented, this is a static check and does not affect runtime performance.
@@ -116,6 +118,50 @@ func NewHttpClient(logger Logger, options ...HttpClientOption) (HttpClient, erro
 }
 
 func validateConfig(_ *httpClientConfig) error {
+	return nil
+}
+
+func (c *httpClient) PreConnect(urlStr string) error {
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		c.logger.Error("failed to parse URL: %s", err.Error())
+		return err
+	}
+
+	if parsedURL.Scheme != "https" {
+		c.logger.Warn("PreConnect only supports https URLs")
+		return fmt.Errorf("PreConnect only supports https URLs")
+	}
+
+	// Get the host:port
+	host := parsedURL.Host
+	if parsedURL.Port() == "" {
+		host = net.JoinHostPort(host, "443")
+	}
+
+	// Get the underlying transport
+	rt, ok := c.Transport.(*roundTripper)
+	if !ok {
+		c.logger.Error("invalid transport type")
+		return fmt.Errorf("invalid transport type")
+	}
+
+	// Use the existing dialTLS to establish just the TLS connection
+	ctx := context.Background()
+	if c.config.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.config.timeout)
+		defer cancel()
+	}
+
+	_, err = rt.dialTLS(ctx, "tcp", host)
+	if err != nil && err != errProtocolNegotiated {
+		c.logger.Error("failed to establish TLS connection: %s", err.Error())
+		return err
+	}
+
+	c.logger.Debug("successfully preconnected to %s", urlStr)
+
 	return nil
 }
 
