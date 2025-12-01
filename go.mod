@@ -3,9 +3,10 @@ module github.com/burruplambert/tls-client
 go 1.24.1
 
 require (
-	github.com/Dharmey747/quic-go-utls v1.0.3-utls
-	github.com/bogdanfinn/fhttp v0.6.0
-	github.com/bogdanfinn/utls v1.7.3-barnius
+	github.com/bdandy/go-socks4 v1.2.3
+	github.com/bogdanfinn/fhttp v0.6.3
+	github.com/bogdanfinn/quic-go-utls v1.0.4-utls
+	github.com/bogdanfinn/utls v1.7.4-barnius
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.9.0
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5
@@ -14,6 +15,7 @@ require (
 
 require (
 	github.com/andybalholm/brotli v1.1.1 // indirect
+	github.com/bdandy/go-errors v1.2.2 // indirect
 	github.com/cloudflare/circl v1.5.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
@@ -30,5 +32,7 @@ require (
 )
 
 // replace github.com/bogdanfinn/utls => ../utls
+
+// replace github.com/bogdanfinn/quic-go-utls => ../quic-go-utls
 
 // replace github.com/bogdanfinn/fhttp => ../fhttp
