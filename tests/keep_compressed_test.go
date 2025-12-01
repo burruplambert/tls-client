@@ -6,7 +6,7 @@ import (
 
 	http "github.com/bogdanfinn/fhttp"
 	"github.com/bogdanfinn/fhttp/httptest"
-	tls_client "github.com/bogdanfinn/tls-client"
+	tls_client "github.com/burruplambert/tls-client"
 	"github.com/stretchr/testify/assert"
 )
 
