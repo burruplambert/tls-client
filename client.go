@@ -38,6 +38,7 @@ type HttpClient interface {
 	Post(url, contentType string, body io.Reader) (resp *http.Response, err error)
 
 	GetBandwidthTracker() bandwidth.BandwidthTracker
+	GetDialer() proxy.ContextDialer
 
 	PreConnect(urlStr string) error
 }
@@ -46,13 +47,12 @@ type HttpClient interface {
 var _ HttpClient = (*httpClient)(nil)
 
 type httpClient struct {
-	logger Logger
-
+	http.Client
+	logger           Logger
 	bandwidthTracker bandwidth.BandwidthTracker
 	config           *httpClientConfig
-
-	http.Client
-	headerLck sync.Mutex
+	headerLck        sync.Mutex
+	dialer           proxy.ContextDialer
 }
 
 var DefaultTimeoutSeconds = 30
@@ -91,7 +91,7 @@ func NewHttpClient(logger Logger, options ...HttpClientOption) (HttpClient, erro
 		return nil, err
 	}
 
-	client, bandwidthTracker, clientProfile, err := buildFromConfig(logger, config)
+	client, dialer, bandwidthTracker, clientProfile, err := buildFromConfig(logger, config)
 	if err != nil {
 		return nil, err
 	}
@@ -116,21 +116,46 @@ func NewHttpClient(logger Logger, options ...HttpClientOption) (HttpClient, erro
 		config:           config,
 		headerLck:        sync.Mutex{},
 		bandwidthTracker: bandwidthTracker,
+		dialer:           dialer,
 	}, nil
 }
 
-func validateConfig(_ *httpClientConfig) error {
+func validateConfig(config *httpClientConfig) error {
+	if config.enableProtocolRacing && config.disableHttp3 {
+		return fmt.Errorf("invalid config: HTTP/3 racing cannot be enabled when HTTP/3 is disabled")
+	}
+
+	if config.enableProtocolRacing && config.forceHttp1 {
+		return fmt.Errorf("invalid config: HTTP/3 racing cannot be enabled when HTTP/1 is forced")
+	}
+
+	if config.disableIPV4 && config.disableIPV6 {
+		return fmt.Errorf("invalid config: cannot disable both IPv4 and IPv6")
+	}
+
+	if config.serverNameOverwrite != "" && !config.insecureSkipVerify {
+		return fmt.Errorf("invalid config: server name overwrite requires insecure skip verify to be enabled")
+	}
+
+	if len(config.certificatePins) > 0 && config.insecureSkipVerify {
+		return fmt.Errorf("invalid config: certificate pinning cannot be used with insecure skip verify")
+	}
+
+	if config.proxyUrl != "" && config.proxyDialerFactory != nil {
+		return fmt.Errorf("invalid config: cannot set both proxy URL and custom proxy dialer factory (only one will be used)")
+	}
+
 	return nil
 }
 
-func buildFromConfig(logger Logger, config *httpClientConfig) (*http.Client, bandwidth.BandwidthTracker, profiles.ClientProfile, error) {
+func buildFromConfig(logger Logger, config *httpClientConfig) (*http.Client, proxy.ContextDialer, bandwidth.BandwidthTracker, profiles.ClientProfile, error) {
 	var dialer proxy.ContextDialer
 	dialer = newDirectDialer(config.timeout, config.localAddr, config.dialer)
 
 	if config.proxyUrl != "" && config.proxyDialerFactory == nil {
 		proxyDialer, err := newConnectDialer(config.proxyUrl, config.timeout, config.localAddr, config.dialer, config.connectHeaders, logger)
 		if err != nil {
-			return nil, nil, profiles.ClientProfile{}, err
+			return nil, nil, nil, profiles.ClientProfile{}, err
 		}
 
 		dialer = proxyDialer
@@ -139,7 +164,7 @@ func buildFromConfig(logger Logger, config *httpClientConfig) (*http.Client, ban
 	if config.proxyDialerFactory != nil {
 		proxyDialer, err := config.proxyDialerFactory(config.proxyUrl, config.timeout, config.localAddr, config.connectHeaders, logger)
 		if err != nil {
-			return nil, nil, profiles.ClientProfile{}, err
+			return nil, nil, nil, profiles.ClientProfile{}, err
 		}
 
 		dialer = proxyDialer
@@ -165,9 +190,9 @@ func buildFromConfig(logger Logger, config *httpClientConfig) (*http.Client, ban
 
 	clientProfile := config.clientProfile
 
-	transport, err := newRoundTripper(clientProfile, config.transportOptions, config.serverNameOverwrite, config.insecureSkipVerify, config.withRandomTlsExtensionOrder, config.forceHttp1, config.disableHttp3, config.certificatePins, config.badPinHandler, config.disableIPV6, config.disableIPV4, config.resolveMap, bandwidthTracker, dialer)
+	transport, err := newRoundTripper(clientProfile, config.transportOptions, config.serverNameOverwrite, config.insecureSkipVerify, config.withRandomTlsExtensionOrder, config.forceHttp1, config.disableHttp3, config.enableProtocolRacing, config.certificatePins, config.badPinHandler, config.disableIPV6, config.disableIPV4, config.resolveMap, bandwidthTracker, dialer)
 	if err != nil {
-		return nil, nil, clientProfile, err
+		return nil, nil, nil, clientProfile, err
 	}
 
 	client := &http.Client{
@@ -180,12 +205,17 @@ func buildFromConfig(logger Logger, config *httpClientConfig) (*http.Client, ban
 		client.Jar = config.cookieJar
 	}
 
-	return client, bandwidthTracker, clientProfile, nil
+	return client, dialer, bandwidthTracker, clientProfile, nil
 }
 
 // CloseIdleConnections closes all idle connections of the underlying http client.
 func (c *httpClient) CloseIdleConnections() {
 	c.Client.CloseIdleConnections()
+}
+
+// GetDialer() returns the underlying Dialer
+func (c *httpClient) GetDialer() proxy.ContextDialer {
+	return c.dialer
 }
 
 // SetFollowRedirect configures the client's HTTP redirect following policy.
@@ -268,7 +298,7 @@ func (c *httpClient) applyProxy() error {
 		dialer = proxyDialer
 	}
 
-	transport, err := newRoundTripper(c.config.clientProfile, c.config.transportOptions, c.config.serverNameOverwrite, c.config.insecureSkipVerify, c.config.withRandomTlsExtensionOrder, c.config.forceHttp1, c.config.disableHttp3, c.config.certificatePins, c.config.badPinHandler, c.config.disableIPV6, c.config.disableIPV4, c.config.resolveMap, c.bandwidthTracker, dialer)
+	transport, err := newRoundTripper(c.config.clientProfile, c.config.transportOptions, c.config.serverNameOverwrite, c.config.insecureSkipVerify, c.config.withRandomTlsExtensionOrder, c.config.forceHttp1, c.config.disableHttp3, c.config.enableProtocolRacing, c.config.certificatePins, c.config.badPinHandler, c.config.disableIPV6, c.config.disableIPV4, c.config.resolveMap, c.bandwidthTracker, dialer)
 	if err != nil {
 		return err
 	}
