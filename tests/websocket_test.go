@@ -80,6 +80,52 @@ func TestWebSocketEcho(t *testing.T) {
 	wsConnection.SetReadDeadline(time.Now().Add(2 * time.Second))
 }
 
+func TestWebSocketEchoRealWebserver(t *testing.T) {
+	url := "wss://echo.websocket.org"
+
+	options := []tls_client.HttpClientOption{
+		tls_client.WithClientProfile(profiles.Chrome_133),
+		tls_client.WithRandomTLSExtensionOrder(),
+		tls_client.WithForceHttp1(), // WebSocket requires HTTP/1.1
+	}
+
+	client, err := tls_client.NewHttpClient(nil, options...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	websocketOptions := []tls_client.WebsocketOption{
+		tls_client.WithTlsClient(client),
+		tls_client.WithUrl(url),
+		tls_client.WithHeaders(http.Header{}),
+		tls_client.WithHandshakeTimeoutMilliseconds(1000),
+	}
+
+	ws, err := tls_client.NewWebsocket(nil, websocketOptions...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wsConnection, err := ws.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer wsConnection.Close()
+
+	testMessage := "hello world"
+	err = wsConnection.WriteMessage(gorillaWebsocket.TextMessage, []byte(testMessage))
+	require.NoError(t, err)
+
+	_, msg, err := wsConnection.ReadMessage()
+	require.NoError(t, err)
+	// echo.websocket.org sends its own message instead of echoing, so just verify we got a response
+	require.NotEmpty(t, string(msg))
+	t.Logf("Received message from server: %s", string(msg))
+
+	wsConnection.SetReadDeadline(time.Now().Add(2 * time.Second))
+}
+
 func TestWebSocketWithHeaderOrder(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(echoHandler))
 	defer server.Close()
