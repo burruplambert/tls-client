@@ -95,7 +95,6 @@ type httpClientConfig struct {
 	disableIPV4 bool
 
 	enabledBandwidthTracker bool
-	euckrResponse           bool
 
 	preHooks  []PreRequestHookFunc
 	postHooks []PostResponseHookFunc
@@ -337,12 +336,6 @@ func WithBandwidthTracker() HttpClientOption {
 func WithConnectHeaders(headers http.Header) HttpClientOption {
 	return func(config *httpClientConfig) {
 		config.connectHeaders = headers
-	}
-}
-
-func WithEnableEuckrResponse() HttpClientOption {
-	return func(config *httpClientConfig) {
-		config.euckrResponse = true
 	}
 }
 

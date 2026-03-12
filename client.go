@@ -17,9 +17,8 @@ import (
 	"github.com/bogdanfinn/fhttp/httputil"
 	"github.com/burruplambert/tls-client/bandwidth"
 	"github.com/burruplambert/tls-client/profiles"
+	"golang.org/x/net/html/charset"
 	"golang.org/x/net/proxy"
-	"golang.org/x/text/encoding/korean"
-	"golang.org/x/text/transform"
 )
 
 var defaultRedirectFunc = func(req *http.Request, via []*http.Request) error {
@@ -603,23 +602,38 @@ func (c *httpClient) do(req *http.Request) (*http.Response, error) {
 		}
 
 		if resp.Body != nil {
-			buf, err := io.ReadAll(resp.Body)
-			if err != nil {
+			var respBodyBytes []byte
+			var bodyReader io.Reader
+
+			// Try to preview a single byte of the body reader to prevent EOF caused by empty bodies.
+			// This is probably the best way of reliably detecting empty response bodies,
+			// especially when the content-length response header is not present.
+			firstByte := make([]byte, 1)
+			n, err := io.ReadFull(resp.Body, firstByte)
+			if err != nil && !errors.Is(err, io.EOF) {
 				return nil, err
 			}
-			defer resp.Body.Close()
 
-			responseBody := io.NopCloser(bytes.NewBuffer(buf))
+			if n == 0 { // No response body exists
+				respBodyBytes = nil
+			} else {
+				bodyReader = io.MultiReader(bytes.NewReader(firstByte[:n]), resp.Body)
+				// Automatically detect the correct charset
+				bodyReader, err = charset.NewReader(bodyReader, resp.Header.Get("Content-Type"))
+				if err != nil {
+					return nil, err
+				}
 
-			finalResponse := string(buf)
-
-			if c.config.euckrResponse {
-				var bufs bytes.Buffer
-				wr := transform.NewWriter(&bufs, korean.EUCKR.NewDecoder())
-				wr.Write(buf)
-				wr.Close()
-				finalResponse = bufs.String()
+				respBodyBytes, err = io.ReadAll(bodyReader)
+				if err != nil {
+					return nil, err
+				}
+				defer resp.Body.Close()
 			}
+
+			responseBody := io.NopCloser(bytes.NewBuffer(respBodyBytes))
+
+			finalResponse := string(respBodyBytes)
 
 			c.logger.Debug("response body payload: %s", finalResponse)
 
