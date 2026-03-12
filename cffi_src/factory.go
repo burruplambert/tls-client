@@ -4,6 +4,7 @@ package tls_client_cffi_src
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,8 +12,7 @@ import (
 	"sync"
 
 	"github.com/burruplambert/tls-client/profiles"
-	"golang.org/x/text/encoding/korean"
-	"golang.org/x/text/transform"
+	"golang.org/x/net/html/charset"
 
 	http "github.com/bogdanfinn/fhttp"
 	"github.com/bogdanfinn/fhttp/cookiejar"
@@ -146,7 +146,7 @@ func BuildRequest(input RequestInput) (*http.Request, *TLSClientError) {
 	return tlsReq, nil
 }
 
-func readAllBodyWithStreamToFile(respBody io.ReadCloser, input RequestInput) ([]byte, error) {
+func readAllBodyWithStreamToFile(respBody io.Reader, input RequestInput) ([]byte, error) {
 	var respBodyBytes []byte
 	var err error
 	bodyLen := 0
@@ -203,27 +203,48 @@ func BuildResponse(sessionId string, withSession bool, resp *http.Response, cook
 	defer resp.Body.Close()
 
 	isByteResponse := input.IsByteResponse
-	euckrResponse := input.EuckrResponse
 
 	ce := resp.Header.Get("Content-Encoding")
+	ct := resp.Header.Get("Content-Type")
 
 	var respBodyBytes []byte
-	var err error
+	var bodyReader io.Reader
 
 	if !resp.Uncompressed {
 		resp.Body = http.DecompressBodyByType(resp.Body, ce)
 	}
 
-	if input.StreamOutputPath != nil {
-		respBodyBytes, err = readAllBodyWithStreamToFile(resp.Body, input)
-	} else {
-		respBodyBytes, err = io.ReadAll(resp.Body)
-	}
+	bodyReader = resp.Body
 
-	if err != nil {
-		clientErr := NewTLSClientError(err)
+	if !isByteResponse {
+		// Try to preview a single byte of the body reader to prevent EOF caused by empty bodies.
+		// This is probably the best way of reliably detecting empty response bodies,
+		// especially when the content-length response header is not present.
+		firstByte := make([]byte, 1)
+		n, err := io.ReadFull(resp.Body, firstByte)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return Response{}, NewTLSClientError(err)
+		}
 
-		return Response{}, clientErr
+		if n == 0 {
+			respBodyBytes = nil
+		} else {
+			bodyReader = io.MultiReader(bytes.NewReader(firstByte[:n]), resp.Body)
+			// Automatically detect the charset for non-byte responses
+			bodyReader, err = charset.NewReader(bodyReader, ct)
+			if err != nil {
+				return Response{}, NewTLSClientError(err)
+			}
+
+			if input.StreamOutputPath != nil {
+				respBodyBytes, err = readAllBodyWithStreamToFile(bodyReader, input)
+			} else {
+				respBodyBytes, err = io.ReadAll(bodyReader)
+			}
+			if err != nil {
+				return Response{}, NewTLSClientError(err)
+			}
+		}
 	}
 
 	finalResponse := string(respBodyBytes)
@@ -234,14 +255,6 @@ func BuildResponse(sessionId string, withSession bool, resp *http.Response, cook
 		base64Encoding += base64.StdEncoding.EncodeToString(respBodyBytes)
 
 		finalResponse = base64Encoding
-	}
-
-	if euckrResponse {
-		var bufs bytes.Buffer
-		wr := transform.NewWriter(&bufs, korean.EUCKR.NewDecoder())
-		wr.Write(respBodyBytes)
-		wr.Close()
-		finalResponse = bufs.String()
 	}
 
 	response := Response{
@@ -412,10 +425,6 @@ func getTlsClient(requestInput RequestInput, sessionId string, withSession bool)
 
 	if requestInput.ServerNameOverwrite != nil && *requestInput.ServerNameOverwrite != "" {
 		options = append(options, tls_client.WithServerNameOverwrite(*requestInput.ServerNameOverwrite))
-	}
-
-	if requestInput.EuckrResponse {
-		options = append(options, tls_client.WithEnableEuckrResponse())
 	}
 
 	proxy := proxyUrl
