@@ -45,7 +45,10 @@ func ClearSessionCache() {
 	clientsLock.Lock()
 	defer clientsLock.Unlock()
 
-	// the remaining clients will be cleaned up by the garbage collection
+	for _, client := range clients {
+		client.CloseIdleConnections()
+	}
+
 	clients = make(map[string]tls_client.HttpClient)
 }
 
@@ -244,6 +247,17 @@ func BuildResponse(sessionId string, withSession bool, resp *http.Response, cook
 			if err != nil {
 				return Response{}, NewTLSClientError(err)
 			}
+		}
+	} else {
+		var err error
+		if input.StreamOutputPath != nil {
+			respBodyBytes, err = readAllBodyWithStreamToFile(bodyReader, input)
+		} else {
+			respBodyBytes, err = io.ReadAll(bodyReader)
+		}
+
+		if err != nil {
+			return Response{}, NewTLSClientError(err)
 		}
 	}
 
