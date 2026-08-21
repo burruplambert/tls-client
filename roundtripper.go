@@ -38,6 +38,7 @@ type roundTripper struct {
 	badPinHandlerFunc BadPinHandlerFunc
 	cachedConnections map[string]net.Conn
 	cachedTransports  map[string]http.RoundTripper
+	cachedProtocols   map[string]string
 
 	headerPriority      *http2.PriorityParam
 	settings            map[http2.SettingID]uint32
@@ -320,14 +321,29 @@ func (rt *roundTripper) dialTLS(ctx context.Context, network, addr string) (net.
 		return nil, err
 	}
 
+	negotiatedProtocol := conn.ConnectionState().NegotiatedProtocol
+
 	if rt.cachedTransports[addr] != nil {
-		return conn, nil
+		if rt.cachedProtocols[addr] == negotiatedProtocol {
+			return conn, nil
+		}
+
+		// The server negotiated a different ALPN protocol than the one the
+		// cached transport was built for (e.g. it switched from HTTP/1.1 to
+		// HTTP/2, or vice versa, between connections to the same address).
+		// Reusing the stale transport would feed it frames it can't parse,
+		// so evict it and fall through to rebuild a transport matching the
+		// freshly negotiated protocol. The in-flight request that triggered
+		// this dial fails with the error below, but the address self-heals:
+		// the next request picks up the freshly rebuilt transport.
+		delete(rt.cachedTransports, addr)
+		delete(rt.cachedProtocols, addr)
 	}
 
 	// No http.Transport constructed yet, create one based on the results
 	// of ALPN if no http1 is enforced.
 
-	switch conn.ConnectionState().NegotiatedProtocol {
+	switch negotiatedProtocol {
 	case http2.NextProtoTLS:
 		utlsConfig := &tls.Config{ClientSessionCache: rt.clientSessionCache, InsecureSkipVerify: rt.insecureSkipVerify, OmitEmptyPsk: true}
 		if rt.transportOptions != nil {
@@ -410,6 +426,7 @@ func (rt *roundTripper) dialTLS(ctx context.Context, network, addr string) (net.
 
 		t2.PushHandler = &http2.DefaultPushHandler{}
 		rt.cachedTransports[addr] = &t2
+		rt.cachedProtocols[addr] = negotiatedProtocol
 	case http3.NextProtoH3:
 		t3, err := buildHTTP3Transport(&http3Config{
 			clientSessionCache:     rt.clientSessionCache,
@@ -426,8 +443,10 @@ func (rt *roundTripper) dialTLS(ctx context.Context, network, addr string) (net.
 			return nil, err
 		}
 		rt.cachedTransports[addr] = t3
+		rt.cachedProtocols[addr] = negotiatedProtocol
 	default:
 		rt.cachedTransports[addr] = rt.buildHttp1Transport()
+		rt.cachedProtocols[addr] = negotiatedProtocol
 	}
 
 	// Stash the connection just established for use servicing the
@@ -582,6 +601,7 @@ func newRoundTripper(clientProfile profiles.ClientProfile, transportOptions *Tra
 		connectionFlow:              clientProfile.GetConnectionFlow(),
 		clientHelloId:               clientProfile.GetClientHelloId(),
 		cachedTransports:            make(map[string]http.RoundTripper),
+		cachedProtocols:             make(map[string]string),
 		cachedConnections:           make(map[string]net.Conn),
 		disableIPV6:                 disableIPV6,
 		disableIPV4:                 disableIPV4,
