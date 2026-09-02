@@ -718,6 +718,7 @@ func newRoundTripper(clientProfile profiles.ClientProfile, transportOptions *Tra
 			clientProfile.GetSettings(),
 			rt.cachedTransports,
 			&rt.cachedTransportsLck,
+			rt.dropCachedTransport,
 			pinner,
 			badPinHandlerFunc,
 			bandwidthTracker,
