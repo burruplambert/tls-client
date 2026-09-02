@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,24 @@ type roundTripper struct {
 	badPinHandlerFunc BadPinHandlerFunc
 	cachedConnections map[string]net.Conn
 	cachedTransports  map[string]http.RoundTripper
+	resolveMap        map[string]string
+
+	// cachedKinds records which kind of transport is cached for each address, so
+	// a later handshake to the same address can tell whether it still fits the
+	// protocol the server just negotiated.
+	//
+	// It holds the kind rather than the ALPN string because several protocols
+	// share one transport: a server that negotiates nothing and one that
+	// negotiates "http/1.1" both get the HTTP/1 transport, and comparing the raw
+	// strings would throw away a perfectly good transport when a load balancer
+	// omits ALPN on one connection.
+	//
+	// It has a mutex of its own rather than sharing cachedTransportsLck, because
+	// dialTLS runs both with that lock held, on the first dial through
+	// getTransport, and without it, on a reconnect from the transport's own
+	// dialer. Taking it here would deadlock the first of those.
+	cachedKinds    map[string]transportKind
+	cachedKindsLck sync.Mutex
 
 	headerPriority      *http2.PriorityParam
 	settings            map[http2.SettingID]uint32
@@ -53,6 +72,7 @@ type roundTripper struct {
 
 	forceHttp1   bool
 	disableHttp3 bool
+	proxyURL     string
 
 	// racer handles HTTP/3 racing (nil if racing is disabled)
 	racer *protocolRacer
@@ -68,7 +88,6 @@ type roundTripper struct {
 	withRandomTlsExtensionOrder bool
 	disableIPV6                 bool
 	disableIPV4                 bool
-	resolveMap                  map[string]string
 }
 
 // http3Config contains all parameters needed to build an HTTP/3 transport
@@ -82,6 +101,71 @@ type http3Config struct {
 	http3PriorityParam     uint32
 	http3PseudoHeaderOrder []string
 	http3SendGreaseFrames  bool
+	proxyURL               string
+}
+
+// transportKind is which of the three transports an ALPN result maps to.
+// Several protocols share one, which is why the kind rather than the protocol
+// string is what gets compared on a reconnect.
+type transportKind int
+
+const (
+	transportHTTP1 transportKind = iota
+	transportHTTP2
+	transportHTTP3
+)
+
+func kindForProtocol(protocol string) transportKind {
+	switch protocol {
+	case http2.NextProtoTLS:
+		return transportHTTP2
+	case http3.NextProtoH3:
+		return transportHTTP3
+	default:
+		return transportHTTP1
+	}
+}
+
+// errProtocolChanged is returned by dialTLS when the handshake negotiated a
+// protocol the cached transport for that address cannot speak.
+var errProtocolChanged = errors.New("tls-client: the server negotiated a protocol the cached transport does not speak")
+
+func (rt *roundTripper) cachedKind(addr string) (transportKind, bool) {
+	rt.cachedKindsLck.Lock()
+	defer rt.cachedKindsLck.Unlock()
+
+	kind, ok := rt.cachedKinds[addr]
+	return kind, ok
+}
+
+func (rt *roundTripper) setCachedKind(addr string, kind transportKind) {
+	rt.cachedKindsLck.Lock()
+	defer rt.cachedKindsLck.Unlock()
+
+	rt.cachedKinds[addr] = kind
+}
+
+// dropCachedTransport forgets the transport cached for addr.
+//
+// This lives here rather than in dialTLS because it writes cachedTransports,
+// and dialTLS runs without the lock that guards it whenever a cached transport
+// dials a replacement connection. It is only dropped when it is still the one
+// that failed, so a transport another goroutine has already replaced is left
+// alone.
+func (rt *roundTripper) dropCachedTransport(addr string, stale http.RoundTripper) {
+	rt.cachedTransportsLck.Lock()
+	if rt.cachedTransports[addr] == stale {
+		delete(rt.cachedTransports, addr)
+	}
+	rt.cachedTransportsLck.Unlock()
+
+	rt.cachedKindsLck.Lock()
+	delete(rt.cachedKinds, addr)
+	rt.cachedKindsLck.Unlock()
+
+	if closer, ok := stale.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
 }
 
 func (rt *roundTripper) CloseIdleConnections() {
@@ -136,6 +220,22 @@ func buildHTTP3Transport(cfg *http3Config) (http.RoundTripper, error) {
 	t3 := &http3.Transport{
 		TLSClientConfig: utlsConfig,
 		EnableDatagrams: true, // Chrome enables H3_DATAGRAM (setting 0x33)
+	}
+
+	if cfg.proxyURL != "" {
+		parsedURL, parseErr := url.Parse(cfg.proxyURL)
+		if parseErr != nil {
+			return nil, fmt.Errorf("can not use proxy for HTTP/3: invalid proxy url: %w", parseErr)
+		}
+
+		// Only SOCKS5 can tunnel UDP (via UDP ASSOCIATE), which QUIC requires. Every other
+		// scheme would leave the QUIC connection unproxied and leak the real IP, so refuse
+		// here instead of silently dialing direct.
+		if parsedURL.Scheme != "socks5" && parsedURL.Scheme != "socks5h" {
+			return nil, fmt.Errorf("can not use proxy for HTTP/3: proxy scheme %q only supports TCP and can not tunnel QUIC/UDP traffic. Use a socks5:// proxy or disable HTTP/3", parsedURL.Scheme)
+		}
+
+		t3.Dial = newSOCKS5QUICDialer(cfg.proxyURL)
 	}
 
 	http3Settings := cfg.http3Settings
@@ -238,7 +338,12 @@ func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	t := rt.cachedTransports[addr]
 	rt.cachedTransportsLck.Unlock()
 
-	return t.RoundTrip(req)
+	resp, err := t.RoundTrip(req)
+	if err != nil && errors.Is(err, errProtocolChanged) {
+		rt.dropCachedTransport(addr, t)
+	}
+
+	return resp, err
 }
 
 func (rt *roundTripper) getTransport(req *http.Request, addr string) error {
@@ -329,14 +434,37 @@ func (rt *roundTripper) dialTLS(ctx context.Context, network, addr string) (net.
 		return nil, err
 	}
 
-	if rt.cachedTransports[addr] != nil {
-		return conn, nil
+	negotiatedProtocol := conn.ConnectionState().NegotiatedProtocol
+	negotiatedKind := kindForProtocol(negotiatedProtocol)
+
+	// A transport is already cached for this address. Reuse it only when the
+	// handshake that just completed negotiated a protocol it can speak.
+	//
+	// Servers do change their mind: an address behind a load balancer can offer
+	// http/1.1 on one connection and h2 on the next. Handing the new connection to
+	// the cached transport regardless means an HTTP/1 transport reading an HTTP/2
+	// SETTINGS frame as if it were a status line, which fails with a "malformed
+	// HTTP response" naming the raw frame bytes and keeps failing for that address
+	// until the whole client is thrown away.
+	//
+	// This connection cannot be rescued, because the dial belongs to the transport
+	// that speaks the wrong protocol. Report it instead, and let RoundTrip drop the
+	// cache entry: it holds the lock that guards cachedTransports, and this
+	// function does not.
+	if cachedKind, ok := rt.cachedKind(addr); ok {
+		if cachedKind == negotiatedKind {
+			return conn, nil
+		}
+
+		_ = conn.Close()
+
+		return nil, fmt.Errorf("%w: %s negotiated %q", errProtocolChanged, addr, negotiatedProtocol)
 	}
 
-	// No http.Transport constructed yet, create one based on the results
-	// of ALPN if no http1 is enforced.
+	// No usable http.Transport for this address yet, create one based on the
+	// results of ALPN if no http1 is enforced.
 
-	switch conn.ConnectionState().NegotiatedProtocol {
+	switch negotiatedProtocol {
 	case http2.NextProtoTLS:
 		utlsConfig := &tls.Config{ClientSessionCache: rt.clientSessionCache, InsecureSkipVerify: rt.insecureSkipVerify, OmitEmptyPsk: true}
 		if rt.transportOptions != nil {
@@ -419,6 +547,7 @@ func (rt *roundTripper) dialTLS(ctx context.Context, network, addr string) (net.
 
 		t2.PushHandler = &http2.DefaultPushHandler{}
 		rt.cachedTransports[addr] = &t2
+		rt.setCachedKind(addr, transportHTTP2)
 	case http3.NextProtoH3:
 		t3, err := buildHTTP3Transport(&http3Config{
 			clientSessionCache:     rt.clientSessionCache,
@@ -430,13 +559,16 @@ func (rt *roundTripper) dialTLS(ctx context.Context, network, addr string) (net.
 			http3PriorityParam:     rt.http3PriorityParam,
 			http3PseudoHeaderOrder: rt.http3PseudoHeaderOrder,
 			http3SendGreaseFrames:  rt.http3SendGreaseFrames,
+			proxyURL:               rt.proxyURL,
 		})
 		if err != nil {
 			return nil, err
 		}
 		rt.cachedTransports[addr] = t3
+		rt.setCachedKind(addr, transportHTTP3)
 	default:
 		rt.cachedTransports[addr] = rt.buildHttp1Transport()
+		rt.setCachedKind(addr, transportHTTP1)
 	}
 
 	// Stash the connection just established for use servicing the
@@ -550,9 +682,9 @@ func (rt *roundTripper) dialTLSForWebsocket(ctx context.Context, network, addr s
 }
 
 func (rt *roundTripper) getDialTLSAddr(req *http.Request) string {
-	host, port, err := net.SplitHostPort(req.URL.Host)
-	if err != nil {
-		host = req.URL.Host
+	host := req.URL.Hostname()
+	port := req.URL.Port()
+	if port == "" {
 		port = "443"
 	}
 
@@ -567,7 +699,7 @@ func (rt *roundTripper) getDialTLSAddr(req *http.Request) string {
 	return net.JoinHostPort(host, port)
 }
 
-func newRoundTripper(clientProfile profiles.ClientProfile, transportOptions *TransportOptions, serverNameOverwrite string, insecureSkipVerify bool, withRandomTlsExtensionOrder bool, forceHttp1 bool, disableHttp3 bool, enableH3Racing bool, certificatePins map[string][]string, badPinHandlerFunc BadPinHandlerFunc, disableIPV6 bool, disableIPV4 bool, resolveMap map[string]string, bandwidthTracker bandwidth.BandwidthTracker, dialer ...proxy.ContextDialer) (http.RoundTripper, error) {
+func newRoundTripper(clientProfile profiles.ClientProfile, transportOptions *TransportOptions, serverNameOverwrite string, insecureSkipVerify, withRandomTlsExtensionOrder, forceHttp1, disableHttp3, disableSessionTickets, enableH3Racing bool, certificatePins map[string][]string, badPinHandlerFunc BadPinHandlerFunc, disableIPV6, disableIPV4 bool, resolveMap map[string]string, bandwidthTracker bandwidth.BandwidthTracker, proxyURL string, dialer ...proxy.ContextDialer) (http.RoundTripper, error) {
 	pinner, err := NewCertificatePinner(certificatePins)
 	if err != nil {
 		return nil, fmt.Errorf("can not instantiate certificate pinner: %w", err)
@@ -575,7 +707,7 @@ func newRoundTripper(clientProfile profiles.ClientProfile, transportOptions *Tra
 
 	var clientSessionCache tls.ClientSessionCache
 
-	withSessionResumption := supportsSessionResumption(clientProfile.GetClientHelloId())
+	withSessionResumption := !disableSessionTickets && supportsSessionResumption(clientProfile.GetClientHelloId())
 
 	if withSessionResumption {
 		clientSessionCache = tls.NewLRUClientSessionCache(32)
@@ -601,8 +733,10 @@ func newRoundTripper(clientProfile profiles.ClientProfile, transportOptions *Tra
 		clientHelloId:               clientProfile.GetClientHelloId(),
 		cachedTransports:            make(map[string]http.RoundTripper),
 		cachedConnections:           make(map[string]net.Conn),
+		cachedKinds:                 make(map[string]transportKind),
 		disableIPV6:                 disableIPV6,
 		disableIPV4:                 disableIPV4,
+		resolveMap:                  resolveMap,
 		bandwidthTracker:            bandwidthTracker,
 		initialStreamID:             clientProfile.GetStreamID(),
 		allowHTTP:                   clientProfile.GetAllowHTTP(),
@@ -611,7 +745,7 @@ func newRoundTripper(clientProfile profiles.ClientProfile, transportOptions *Tra
 		http3PriorityParam:          clientProfile.GetHttp3PriorityParam(),
 		http3PseudoHeaderOrder:      clientProfile.GetHttp3PseudoHeaderOrder(),
 		http3SendGreaseFrames:       clientProfile.GetHttp3SendGreaseFrames(),
-		resolveMap:                  resolveMap,
+		proxyURL:                    proxyURL,
 	}
 
 	// Create protocol racer if HTTP/3 racing is enabled
@@ -624,6 +758,7 @@ func newRoundTripper(clientProfile profiles.ClientProfile, transportOptions *Tra
 			clientProfile.GetSettings(),
 			rt.cachedTransports,
 			&rt.cachedTransportsLck,
+			rt.dropCachedTransport,
 			pinner,
 			badPinHandlerFunc,
 			bandwidthTracker,
@@ -632,6 +767,7 @@ func newRoundTripper(clientProfile profiles.ClientProfile, transportOptions *Tra
 			clientProfile.GetHttp3PriorityParam(),
 			clientProfile.GetHttp3PseudoHeaderOrder(),
 			clientProfile.GetHttp3SendGreaseFrames(),
+			proxyURL,
 		)
 	}
 

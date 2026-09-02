@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	http "github.com/bogdanfinn/fhttp"
+	"github.com/bogdanfinn/fhttp"
 	"github.com/bogdanfinn/fhttp/httptest"
 	gorillaWebsocket "github.com/bogdanfinn/websocket"
 	tls_client "github.com/burruplambert/tls-client"

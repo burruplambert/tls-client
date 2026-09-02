@@ -47,9 +47,9 @@ type HttpClient interface {
 
 	GetBandwidthTracker() bandwidth.BandwidthTracker
 	GetDialer() proxy.ContextDialer
+	GetTLSDialer() TLSDialerFunc
 
 	PreConnect(urlStr string) error
-	GetTLSDialer() TLSDialerFunc
 
 	AddPreRequestHook(hook PreRequestHookFunc)
 	AddPostResponseHook(hook PostResponseHookFunc)
@@ -98,8 +98,8 @@ func NewHttpClient(logger Logger, options ...HttpClientOption) (HttpClient, erro
 		defaultHeaders:     make(http.Header),
 		connectHeaders:     make(http.Header),
 		clientProfile:      profiles.DefaultClientProfile,
-		timeout:            time.Duration(DefaultTimeoutSeconds) * time.Second,
 		resolveMap:         make(map[string]string),
+		timeout:            time.Duration(DefaultTimeoutSeconds) * time.Second,
 	}
 
 	for _, opt := range options {
@@ -168,7 +168,40 @@ func validateConfig(config *httpClientConfig) error {
 		return fmt.Errorf("invalid config: WithDialContext overrides the built-in proxy logic. If you use a custom dialer, you must handle the proxy connection (CONNECT handshake) yourself inside that dialer.")
 	}
 
+	if err := validateProxyConfig(config.proxyUrl, config); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// validateProxyConfig checks whether proxyUrl can serve every protocol the given config
+// allows. Only SOCKS5 proxies support UDP (via UDP ASSOCIATE), which HTTP/3 needs, so
+// combining protocol racing with any other proxy scheme would let the HTTP/3 traffic
+// bypass the proxy entirely and leak the real IP address.
+func validateProxyConfig(proxyUrl string, config *httpClientConfig) error {
+	if proxyUrl == "" || !config.enableProtocolRacing {
+		return nil
+	}
+
+	proxyScheme := extractProxyScheme(proxyUrl)
+	if proxyScheme == "socks5" || proxyScheme == "socks5h" {
+		return nil
+	}
+
+	return fmt.Errorf("invalid config: protocol racing requires a SOCKS5 proxy for HTTP/3 support. "+
+		"Non-SOCKS5 proxies (scheme %q) only support TCP and cannot tunnel QUIC/UDP traffic, "+
+		"which would cause HTTP/3 connections to bypass the proxy. "+
+		"Use a socks5:// proxy, disable protocol racing, or disable HTTP/3", proxyScheme)
+}
+
+// extractProxyScheme returns the scheme portion of a proxy URL, or empty string if unparseable.
+func extractProxyScheme(proxyURL string) string {
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return ""
+	}
+	return u.Scheme
 }
 
 type customContextDialer struct {
@@ -233,7 +266,7 @@ func buildFromConfig(logger Logger, config *httpClientConfig) (*http.Client, pro
 
 	clientProfile := config.clientProfile
 
-	transport, err := newRoundTripper(clientProfile, config.transportOptions, config.serverNameOverwrite, config.insecureSkipVerify, config.withRandomTlsExtensionOrder, config.forceHttp1, config.disableHttp3, config.enableProtocolRacing, config.certificatePins, config.badPinHandler, config.disableIPV6, config.disableIPV4, config.resolveMap, bandwidthTracker, dialer)
+	transport, err := newRoundTripper(clientProfile, config.transportOptions, config.serverNameOverwrite, config.insecureSkipVerify, config.withRandomTlsExtensionOrder, config.forceHttp1, config.disableHttp3, config.disableSessionTickets, config.enableProtocolRacing, config.certificatePins, config.badPinHandler, config.disableIPV6, config.disableIPV4, config.resolveMap, bandwidthTracker, config.proxyUrl, dialer)
 	if err != nil {
 		return nil, nil, nil, clientProfile, err
 	}
@@ -315,6 +348,13 @@ func (c *httpClient) applyFollowRedirect() {
 func (c *httpClient) SetProxy(proxyUrl string) error {
 	currentProxy := c.config.proxyUrl
 
+	// validateConfig only runs when the client is built, so the proxy related checks have
+	// to be repeated here. Otherwise a client created without a proxy could be switched to
+	// a TCP only proxy at runtime and silently bypass them.
+	if err := validateProxyConfig(proxyUrl, c.config); err != nil {
+		return err
+	}
+
 	c.logger.Debug("set proxy from %s to %s", c.config.proxyUrl, proxyUrl)
 	c.config.proxyUrl = proxyUrl
 
@@ -366,7 +406,7 @@ func (c *httpClient) applyProxy() error {
 		}
 	}
 
-	transport, err := newRoundTripper(c.config.clientProfile, c.config.transportOptions, c.config.serverNameOverwrite, c.config.insecureSkipVerify, c.config.withRandomTlsExtensionOrder, c.config.forceHttp1, c.config.disableHttp3, c.config.enableProtocolRacing, c.config.certificatePins, c.config.badPinHandler, c.config.disableIPV6, c.config.disableIPV4, c.config.resolveMap, c.bandwidthTracker, dialer)
+	transport, err := newRoundTripper(c.config.clientProfile, c.config.transportOptions, c.config.serverNameOverwrite, c.config.insecureSkipVerify, c.config.withRandomTlsExtensionOrder, c.config.forceHttp1, c.config.disableHttp3, c.config.disableSessionTickets, c.config.enableProtocolRacing, c.config.certificatePins, c.config.badPinHandler, c.config.disableIPV6, c.config.disableIPV4, c.config.resolveMap, c.bandwidthTracker, c.config.proxyUrl, dialer)
 	if err != nil {
 		return err
 	}

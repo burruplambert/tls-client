@@ -89,6 +89,7 @@ type httpClientConfig struct {
 	withRandomTlsExtensionOrder bool
 	forceHttp1                  bool
 	disableHttp3                bool
+	disableSessionTickets       bool
 	enableProtocolRacing        bool
 
 	// Establish a connection to origin server via ipv4 only
@@ -280,6 +281,13 @@ func WithDisableHttp3() HttpClientOption {
 	}
 }
 
+// WithDisableSessionTickets configures a client to disable TLS session ticket caching and resumption.
+func WithDisableSessionTickets() HttpClientOption {
+	return func(config *httpClientConfig) {
+		config.disableSessionTickets = true
+	}
+}
+
 // WithProtocolRacing configures a client to race HTTP/3 (QUIC) and HTTP/2 (TCP) connections in parallel.
 // Similar to Chrome's "Happy Eyeballs" approach, this starts both connection types simultaneously
 // and uses whichever connects first.
@@ -363,7 +371,7 @@ func WithPostHook(hook PostResponseHookFunc) HttpClientOption {
 // (Zero-DNS, socket tagging, DPI bypass).
 //
 // WARNING: This overrides built-in proxy settings. If you need a proxy, you must handle the CONNECT handshake manually.
-// CHECK: https://github.com/bogdanfinn/tls-client/pull/218#issuecomment-3858171801
+// CHECK: https://github.com/burruplambert/tls-client/pull/218#issuecomment-3858171801
 func WithDialContext(dialContext func(ctx context.Context, network, addr string) (net.Conn, error)) HttpClientOption {
 	return func(config *httpClientConfig) {
 		config.dialContext = dialContext

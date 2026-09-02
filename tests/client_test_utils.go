@@ -2,6 +2,7 @@ package tests
 
 import (
 	tls "github.com/bogdanfinn/utls"
+	tls_client "github.com/burruplambert/tls-client"
 	"github.com/burruplambert/tls-client/profiles"
 )
 
@@ -14,6 +15,8 @@ type TlsApiResponse struct {
 		TLSVersionNegotiated string   `json:"tls_version_negotiated"`
 		Ja3                  string   `json:"ja3"`
 		Ja3Hash              string   `json:"ja3_hash"`
+		Ja4                  string   `json:"ja4"`
+		Ja4R                 string   `json:"ja4_r"`
 		ClientRandom         string   `json:"client_random"`
 		SessionID            string   `json:"session_id"`
 		Ciphers              []string `json:"ciphers"`
@@ -76,9 +79,17 @@ const (
 
 	ja3String             = "ja3String"
 	ja3Hash               = "ja3Hash"
+	ja4String             = "ja4String"
+	ja4Hash               = "ja4Hash"
 	akamaiFingerprint     = "akamaiFingerprint"
 	akamaiFingerprintHash = "akamaiFingerprintHash"
 )
+
+// skipPeetCertVerify disables certificate verification for one client.
+// tls.peet.ws serves a self-signed certificate, so verification fails there.
+// Only the tests that call peetApiEndpoint use this option.
+// Tests against other hosts keep normal certificate verification.
+var skipPeetCertVerify = tls_client.WithInsecureSkipVerify()
 
 var clientFingerprints = map[string]map[string]map[string]string{
 	chrome: {
@@ -91,6 +102,34 @@ var clientFingerprints = map[string]map[string]map[string]string{
 		profiles.Chrome_146_PSK.GetClientHelloStr(): map[string]string{
 			ja3String:             "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,17613-43-18-65037-51-13-10-27-23-35-0-65281-45-11-5-16-51764-41,4588-29-23-24,0",
 			ja3Hash:               "b725019d0bcb612810eb226664682342",
+			akamaiFingerprint:     "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
+			akamaiFingerprintHash: "52d84b11737d980aef856699f885ca86",
+		},
+		profiles.Chrome_152.GetClientHelloStr(): map[string]string{
+			ja3String:             "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,17613-43-18-65037-51-13-10-27-23-35-0-65281-45-11-5-16-51764,4588-29-23-24,0",
+			ja3Hash:               "5d510aa7220d1a7bc1256493e4b88909",
+			ja4String:             "t13d1517h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0017,001b,0023,002b,002d,0033,44cd,ca34,fe0d,ff01_0904,0905,0906,0403,0804,0401,0503,0805,0501,0806,0601",
+			ja4Hash:               "t13d1517h2_8daaf6152771_cb7bf5808d99",
+			akamaiFingerprint:     "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
+			akamaiFingerprintHash: "52d84b11737d980aef856699f885ca86",
+		},
+		profiles.Chrome_152_PSK.GetClientHelloStr(): map[string]string{
+			ja3String:             "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,17613-43-18-65037-51-13-10-27-23-35-0-65281-45-11-5-16-51764-41,4588-29-23-24,0",
+			ja3Hash:               "b725019d0bcb612810eb226664682342",
+			ja4String:             "t13d1518h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0017,001b,0023,0029,002b,002d,0033,44cd,ca34,fe0d,ff01_0904,0905,0906,0403,0804,0401,0503,0805,0501,0806,0601",
+			ja4Hash:               "t13d1518h2_8daaf6152771_e2d80978ab2e",
+			akamaiFingerprint:     "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
+			akamaiFingerprintHash: "52d84b11737d980aef856699f885ca86",
+		},
+		profiles.Chrome_150.GetClientHelloStr(): map[string]string{
+			ja3String:             "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,17613-43-18-65037-51-13-10-27-23-35-0-65281-45-11-5-16,4588-29-23-24,0",
+			ja3Hash:               "eeee4c6725bf89c31f225b3dab4cef37",
+			akamaiFingerprint:     "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
+			akamaiFingerprintHash: "52d84b11737d980aef856699f885ca86",
+		},
+		profiles.Chrome_150_PSK.GetClientHelloStr(): map[string]string{
+			ja3String:             "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,17613-43-18-65037-51-13-10-27-23-35-0-65281-45-11-5-16-41,4588-29-23-24,0",
+			ja3Hash:               "b89fcace1ff82501838878d4ccb30c6d",
 			akamaiFingerprint:     "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
 			akamaiFingerprintHash: "52d84b11737d980aef856699f885ca86",
 		},
@@ -323,8 +362,8 @@ var clientFingerprints = map[string]map[string]map[string]string{
 		profiles.Safari_IOS_18_0.GetClientHelloStr(): map[string]string{
 			ja3String:             "771,4865-4866-4867-49196-49195-52393-49200-49199-52392-49162-49161-49172-49171-157-156-53-47-49160-49170-10,0-23-65281-10-11-16-5-13-18-51-45-43-27-21,29-23-24-25,0",
 			ja3Hash:               "773906b0efdefa24a7f2b8eb6985bf37",
-			akamaiFingerprint:     "2:0;3:100;4:2097152;:1;9:1|10420225|0|m,s,a,p",
-			akamaiFingerprintHash: "62317f06028f316631c157c720223e43",
+			akamaiFingerprint:     "2:0;3:100;4:2097152;8:1;9:1|10420225|0|m,s,a,p",
+			akamaiFingerprintHash: "d4a2dcbfde511b5040ed5a5190a8d78b",
 		},
 		profiles.Safari_IOS_18_5.GetClientHelloStr(): map[string]string{
 			ja3String:             "771,4865-4866-4867-49196-49195-52393-49200-49199-52392-49162-49161-49172-49171-157-156-53-47-49160-49170-10,0-23-65281-10-11-16-5-13-18-51-45-43-27-21,29-23-24-25,0",
