@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"math/big"
 )
 
@@ -43,19 +45,33 @@ func mustDecodeHex(s string) []byte {
 	return data
 }
 
-// mustSplitTrustAnchors splits a captured payload into records. A record is the
-// 8-bit length with the ID that follows it, so records reorder without further
-// parsing. It panics on malformed input, which can only come from a literal in
-// this package.
+// mustSplitTrustAnchors splits a captured payload into records. It panics on
+// malformed input, which can only come from a literal in this package.
 func mustSplitTrustAnchors(capture string) [][]byte {
-	payload := mustDecodeHex(capture)
+	records, err := splitTrustAnchors(capture)
+	if err != nil {
+		panic(err)
+	}
+
+	return records
+}
+
+// splitTrustAnchors splits a captured payload into records. A record is the
+// 8-bit length with the ID that follows it, so records reorder without further
+// parsing.
+func splitTrustAnchors(capture string) ([][]byte, error) {
+	payload, err := hex.DecodeString(capture)
+	if err != nil {
+		return nil, fmt.Errorf("trust anchors payload is not valid hex: %w", err)
+	}
+
 	if len(payload) < 2 {
-		panic("trust anchors payload is shorter than its length field")
+		return nil, errors.New("trust anchors payload is shorter than its length field")
 	}
 
 	list := payload[2:]
 	if int(payload[0])<<8|int(payload[1]) != len(list) {
-		panic("trust anchors length field does not match the list")
+		return nil, errors.New("trust anchors length field does not match the list")
 	}
 
 	var records [][]byte
@@ -63,14 +79,32 @@ func mustSplitTrustAnchors(capture string) [][]byte {
 	for i := 0; i < len(list); {
 		end := i + 1 + int(list[i])
 		if end > len(list) {
-			panic("trust anchor ID runs past the end of the list")
+			return nil, errors.New("trust anchor ID runs past the end of the list")
 		}
 
 		records = append(records, list[i:end])
 		i = end
 	}
 
-	return records
+	return records, nil
+}
+
+// BuildTrustAnchorsPayload turns a captured trust_anchors payload into the data
+// for a fresh extension, with the anchor IDs in a new order.
+//
+// The capture is the hex string from the "Unknown extension 51764" data field
+// of a browser fingerprint, starting at the 16-bit list length. Chromium writes
+// those IDs in absl::flat_hash_set iteration order, which holds for the life of
+// the process and differs between processes, so a custom client should call
+// this once and reuse the result rather than reordering per connection. The
+// built in Chrome profiles do exactly that at package load.
+func BuildTrustAnchorsPayload(capture string) ([]byte, error) {
+	records, err := splitTrustAnchors(capture)
+	if err != nil {
+		return nil, err
+	}
+
+	return shuffleTrustAnchors(records), nil
 }
 
 // shuffleTrustAnchors builds the trust_anchors payload from the given records
