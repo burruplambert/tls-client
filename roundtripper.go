@@ -39,7 +39,6 @@ type roundTripper struct {
 	badPinHandlerFunc BadPinHandlerFunc
 	cachedConnections map[string]net.Conn
 	cachedTransports  map[string]http.RoundTripper
-	resolveMap        map[string]string
 
 	// cachedKinds records which kind of transport is cached for each address, so
 	// a later handshake to the same address can tell whether it still fits the
@@ -389,22 +388,14 @@ func (rt *roundTripper) dialTLS(ctx context.Context, network, addr string) (net.
 		network = "tcp6"
 	}
 
-	var host, port string
-	var err error
-	if host, port, err = net.SplitHostPort(addr); err != nil {
-		host = addr
-		port = "443"
-	}
-
-	if rt.resolveMap != nil {
-		if ip, ok := rt.resolveMap[host]; ok {
-			addr = net.JoinHostPort(ip, port)
-		}
-	}
-
 	rawConn, err := rt.dialer.DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, err
+	}
+
+	var host string
+	if host, _, err = net.SplitHostPort(addr); err != nil {
+		host = addr
 	}
 
 	if rt.serverNameOverwrite != "" {
@@ -684,22 +675,13 @@ func (rt *roundTripper) dialTLSForWebsocket(ctx context.Context, network, addr s
 func (rt *roundTripper) getDialTLSAddr(req *http.Request) string {
 	host := req.URL.Hostname()
 	port := req.URL.Port()
-	if port == "" {
-		port = "443"
+	if port != "" {
+		return net.JoinHostPort(host, port)
 	}
-
-	if rt.resolveMap != nil {
-		if ip, ok := rt.resolveMap[host]; ok {
-			rt.serverNameOverwrite = host
-			rt.cachedConnections[net.JoinHostPort(host, port)] = rt.cachedConnections[net.JoinHostPort(ip, port)]
-			return net.JoinHostPort(ip, port)
-		}
-	}
-
-	return net.JoinHostPort(host, port)
+	return net.JoinHostPort(host, "443")
 }
 
-func newRoundTripper(clientProfile profiles.ClientProfile, transportOptions *TransportOptions, serverNameOverwrite string, insecureSkipVerify, withRandomTlsExtensionOrder, forceHttp1, disableHttp3, disableSessionTickets, enableH3Racing bool, certificatePins map[string][]string, badPinHandlerFunc BadPinHandlerFunc, disableIPV6, disableIPV4 bool, resolveMap map[string]string, bandwidthTracker bandwidth.BandwidthTracker, proxyURL string, dialer ...proxy.ContextDialer) (http.RoundTripper, error) {
+func newRoundTripper(clientProfile profiles.ClientProfile, transportOptions *TransportOptions, serverNameOverwrite string, insecureSkipVerify, withRandomTlsExtensionOrder, forceHttp1, disableHttp3, disableSessionTickets, enableH3Racing bool, certificatePins map[string][]string, badPinHandlerFunc BadPinHandlerFunc, disableIPV6, disableIPV4 bool, bandwidthTracker bandwidth.BandwidthTracker, proxyURL string, dialer ...proxy.ContextDialer) (http.RoundTripper, error) {
 	pinner, err := NewCertificatePinner(certificatePins)
 	if err != nil {
 		return nil, fmt.Errorf("can not instantiate certificate pinner: %w", err)
@@ -736,7 +718,6 @@ func newRoundTripper(clientProfile profiles.ClientProfile, transportOptions *Tra
 		cachedKinds:                 make(map[string]transportKind),
 		disableIPV6:                 disableIPV6,
 		disableIPV4:                 disableIPV4,
-		resolveMap:                  resolveMap,
 		bandwidthTracker:            bandwidthTracker,
 		initialStreamID:             clientProfile.GetStreamID(),
 		allowHTTP:                   clientProfile.GetAllowHTTP(),

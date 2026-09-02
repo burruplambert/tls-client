@@ -101,8 +101,6 @@ type httpClientConfig struct {
 
 	preHooks  []PreRequestHookFunc
 	postHooks []PostResponseHookFunc
-
-	resolveMap map[string]string
 }
 
 // WithProxyUrl configures an HTTP client to use the specified proxy URL.
@@ -375,23 +373,5 @@ func WithPostHook(hook PostResponseHookFunc) HttpClientOption {
 func WithDialContext(dialContext func(ctx context.Context, network, addr string) (net.Conn, error)) HttpClientOption {
 	return func(config *httpClientConfig) {
 		config.dialContext = dialContext
-	}
-}
-
-// WithDynamicAddr configures an HTTP client with a pointer to a local address,
-// allowing the address to be modified between requests without client recreation.
-// Note: Requires DisableKeepAlives to be set to true to ensure address changes
-// take effect on subsequent requests.
-func WithDynamicAddr(localAddr *net.TCPAddr) HttpClientOption {
-	return func(config *httpClientConfig) {
-		config.localAddr = localAddr
-	}
-}
-
-// WithResolveMap configures a client to use the specified map for hostname->IP resolution.
-// Note: Not compatible with WithServerNameOverwrite()
-func WithResolveMap(resolveMap map[string]string) HttpClientOption {
-	return func(config *httpClientConfig) {
-		config.resolveMap = resolveMap
 	}
 }
