@@ -362,8 +362,8 @@ var clientFingerprints = map[string]map[string]map[string]string{
 		profiles.Safari_IOS_18_0.GetClientHelloStr(): map[string]string{
 			ja3String:             "771,4865-4866-4867-49196-49195-52393-49200-49199-52392-49162-49161-49172-49171-157-156-53-47-49160-49170-10,0-23-65281-10-11-16-5-13-18-51-45-43-27-21,29-23-24-25,0",
 			ja3Hash:               "773906b0efdefa24a7f2b8eb6985bf37",
-			akamaiFingerprint:     "2:0;3:100;4:2097152;:1;9:1|10420225|0|m,s,a,p",
-			akamaiFingerprintHash: "62317f06028f316631c157c720223e43",
+			akamaiFingerprint:     "2:0;3:100;4:2097152;8:1;9:1|10420225|0|m,s,a,p",
+			akamaiFingerprintHash: "d4a2dcbfde511b5040ed5a5190a8d78b",
 		},
 		profiles.Safari_IOS_18_5.GetClientHelloStr(): map[string]string{
 			ja3String:             "771,4865-4866-4867-49196-49195-52393-49200-49199-52392-49162-49161-49172-49171-157-156-53-47-49160-49170-10,0-23-65281-10-11-16-5-13-18-51-45-43-27-21,29-23-24-25,0",
